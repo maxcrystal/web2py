@@ -52,7 +52,7 @@ import gluon.serializers as serializers
 Table = DAL.Table
 Field = DAL.Field
 
-__all__ = ['Mail', 'Auth', 'Recaptcha', 'Recaptcha2', 'Crud', 'Service', 'Wiki',
+__all__ = ['Mail', 'Auth', 'Recaptcha2', 'Crud', 'Service', 'Wiki',
            'PluginManager', 'fetch', 'geocode', 'reverse_geocode', 'prettydate']
 
 # mind there are two loggers here (logger and crud.settings.logger)!
@@ -775,7 +775,9 @@ class Mail(object):
                 if attachments:
                     result = mail.send_mail(
                         sender=sender, to=origTo,
-                        subject=to_unicode(subject, encoding), body=to_unicode(text or '', encoding), html=html,
+                        subject=to_unicode(subject, encoding), 
+                        body=to_unicode(text or '', encoding), 
+                        html=html,
                         attachments=attachments, **xcc)
                 elif html and (not raw):
                     result = mail.send_mail(
@@ -785,6 +787,20 @@ class Mail(object):
                     result = mail.send_mail(
                         sender=sender, to=origTo,
                         subject=to_unicode(subject, encoding), body=to_unicode(text or '', encoding), **xcc)
+            elif self.settings.server == 'aws':
+                import boto3
+                from botocore.exceptions import ClientError
+                client = boto3.client('ses')
+                try:
+                    raw = {'Data': payload.as_string()}
+                    response = client.send_raw_email(RawMessage=raw,
+                                                     Source=sender, 
+                                                     Destinations=to)
+                    return True
+                except ClientError as e:
+                    # we should log this error:
+                    # print e.response['Error']['Message']
+                    return False
             else:
                 smtp_args = self.settings.server.split(':')
                 kwargs = dict(timeout=self.settings.timeout)
@@ -808,149 +824,6 @@ class Mail(object):
         self.result = result
         self.error = None
         return True
-
-
-class Recaptcha(DIV):
-
-    """
-    Examples:
-        Use as::
-
-            form = FORM(Recaptcha(public_key='...', private_key='...'))
-
-        or::
-
-            form = SQLFORM(...)
-            form.append(Recaptcha(public_key='...', private_key='...'))
-
-    """
-
-    API_SSL_SERVER = 'https://www.google.com/recaptcha/api'
-    API_SERVER = 'http://www.google.com/recaptcha/api'
-    VERIFY_SERVER = 'http://www.google.com/recaptcha/api/verify'
-
-    def __init__(self,
-                 request=None,
-                 public_key='',
-                 private_key='',
-                 use_ssl=False,
-                 error=None,
-                 error_message='invalid',
-                 label='Verify:',
-                 options='',
-                 comment='',
-                 ajax=False
-                 ):
-        request = request or current.request
-        self.request_vars = request and request.vars or current.request.vars
-        self.remote_addr = request.env.remote_addr
-        self.public_key = public_key
-        self.private_key = private_key
-        self.use_ssl = use_ssl
-        self.error = error
-        self.errors = Storage()
-        self.error_message = error_message
-        self.components = []
-        self.attributes = {}
-        self.label = label
-        self.options = options
-        self.comment = comment
-        self.ajax = ajax
-
-    def _validate(self):
-
-        # for local testing:
-
-        recaptcha_challenge_field = \
-            self.request_vars.recaptcha_challenge_field
-        recaptcha_response_field = \
-            self.request_vars.recaptcha_response_field
-        private_key = self.private_key
-        remoteip = self.remote_addr
-        if not (recaptcha_response_field and recaptcha_challenge_field
-                and len(recaptcha_response_field)
-                and len(recaptcha_challenge_field)):
-            self.errors['captcha'] = self.error_message
-            return False
-        params = urlencode({
-            'privatekey': private_key,
-            'remoteip': remoteip,
-            'challenge': recaptcha_challenge_field,
-            'response': recaptcha_response_field,
-        })
-        request = urllib2.Request(
-            url=self.VERIFY_SERVER,
-            data=params,
-            headers={'Content-type': 'application/x-www-form-urlencoded',
-                     'User-agent': 'reCAPTCHA Python'})
-        httpresp = urllib2.urlopen(request)
-        return_values = httpresp.read().splitlines()
-        httpresp.close()
-        return_code = return_values[0]
-        if return_code == 'true':
-            del self.request_vars.recaptcha_challenge_field
-            del self.request_vars.recaptcha_response_field
-            self.request_vars.captcha = ''
-            return True
-        else:
-            # In case we get an error code, store it so we can get an error message
-            # from the /api/challenge URL as described in the reCAPTCHA api docs.
-            self.error = return_values[1]
-            self.errors['captcha'] = self.error_message
-            return False
-
-    def xml(self):
-        public_key = self.public_key
-        use_ssl = self.use_ssl
-        error_param = ''
-        if self.error:
-            error_param = '&error=%s' % self.error
-        if use_ssl:
-            server = self.API_SSL_SERVER
-        else:
-            server = self.API_SERVER
-        if not self.ajax:
-            captcha = DIV(
-                SCRIPT("var RecaptchaOptions = {%s};" % self.options),
-                SCRIPT(_type="text/javascript",
-                       _src="%s/challenge?k=%s%s" % (server, public_key, error_param)),
-                TAG.noscript(
-                    IFRAME(
-                        _src="%s/noscript?k=%s%s" % (
-                            server, public_key, error_param),
-                        _height="300", _width="500", _frameborder="0"), BR(),
-                    INPUT(
-                        _type='hidden', _name='recaptcha_response_field',
-                        _value='manual_challenge')), _id='recaptcha')
-
-        else:  # use Google's ajax interface, needed for LOADed components
-
-            url_recaptcha_js = "%s/js/recaptcha_ajax.js" % server
-            RecaptchaOptions = "var RecaptchaOptions = {%s}" % self.options
-            script = """%(options)s;
-            jQuery.getScript('%(url)s',function() {
-                Recaptcha.create('%(public_key)s',
-                    'recaptcha',jQuery.extend(RecaptchaOptions,{'callback':Recaptcha.focus_response_field}))
-                }) """ % ({'options': RecaptchaOptions, 'url': url_recaptcha_js, 'public_key': public_key})
-            captcha = DIV(
-                SCRIPT(
-                    script,
-                    _type="text/javascript",
-                ),
-                TAG.noscript(
-                    IFRAME(
-                        _src="%s/noscript?k=%s%s" % (
-                            server, public_key, error_param),
-                        _height="300", _width="500", _frameborder="0"), BR(),
-                    INPUT(
-                        _type='hidden', _name='recaptcha_response_field',
-                        _value='manual_challenge')), _id='recaptcha')
-
-        if not self.errors.captcha:
-            return XML(captcha).xml()
-        else:
-            captcha.append(DIV(self.errors['captcha'], _class='error'))
-            return XML(captcha).xml()
 
 
 class Recaptcha2(DIV):
@@ -3746,6 +3619,7 @@ class Auth(AuthAPI):
                      client_side=self.settings.client_side)
         passfield = self.settings.password_field
         table_user[passfield].writable = False
+        table_user['email'].writable = False
         request = current.request
         session = current.session
         if next is DEFAULT:
@@ -3756,6 +3630,7 @@ class Auth(AuthAPI):
             onaccept = self.settings.profile_onaccept
         if log is DEFAULT:
             log = self.messages['profile_log']
+        
         form = SQLFORM(
             table_user,
             self.user.id,
@@ -5052,7 +4927,7 @@ class Service(object):
             return f
         return _amfrpc3
 
-    def soap(self, name=None, returns=None, args=None, doc=None):
+    def soap(self, name=None, returns=None, args=None, doc=None, response_element_name=None):
         """
         Example:
             Use as::
@@ -5076,7 +4951,7 @@ class Service(object):
         """
 
         def _soap(f):
-            self.soap_procedures[name or f.__name__] = f, returns, args, doc
+            self.soap_procedures[name or f.__name__] = f, returns, args, doc, response_element_name
             return f
         return _soap
 
@@ -5382,8 +5257,8 @@ class Service(object):
             prefix='pys',
             documentation=documentation,
             ns=True)
-        for method, (function, returns, args, doc) in iteritems(procedures):
-            dispatcher.register_function(method, function, returns, args, doc)
+        for method, (function, returns, args, doc, resp_elem_name) in iteritems(procedures):
+            dispatcher.register_function(method, function, returns, args, doc, resp_elem_name)
         if request.env.request_method == 'POST':
             fault = {}
             # Process normal Soap Operation

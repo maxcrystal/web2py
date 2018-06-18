@@ -1,7 +1,4 @@
-ul.navbar-nav.navbar-right {
-    position: absolute;
-    right: 100px;
-}
+
 label, th {
     font-weigth: bold;
     white-space: nowrap;
@@ -107,10 +104,10 @@ select.autocomplete {
 #web2py-logo:hover {
     color: #FFF;
 }
-.footer > .container-fluid {
+.footer > .row {
     padding-left: 15px;
     padding-right: 15px;
-    margin: 20px;
+    margin-top: 20px;
 }
 .background {
     background: url(../images/background.jpg) no-repeat center center;
@@ -318,8 +315,21 @@ td.w2p_fc,
 .web2py_grid table {
     width: 100%;
 }
-input[type=checkbox], input[type=radio] {
-    margin: 4px 4px 0 0;
+
+/* form submit block */
+#submit_record__row .btn {
+    margin-bottom: .25rem;
+}
+@media (min-width: 577px) {
+    #submit_record__row .btn {
+        margin-left: .25rem;
+    }
+}
+@media (max-width: 576px) {
+    #submit_record__row .btn {
+        width: 100%;
+        margin-left: 0;
+    }
 }
 
 /* for backward compatbility with pre-font-awesome */
